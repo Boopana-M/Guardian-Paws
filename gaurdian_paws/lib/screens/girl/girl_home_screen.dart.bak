@@ -1,0 +1,499 @@
+import 'dart:async';
+import 'dart:math';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
+import 'package:provider/provider.dart';
+import 'package:parse_server_sdk_flutter/parse_server_sdk_flutter.dart';
+import '../providers/session_provider.dart';
+import '../services/background_alarm_service.dart';
+import '../services/simple_persistent_alarm_service.dart';
+import '../services/persistent_alarm_service.dart';
+import '../services/ultra_simple_alarm_service.dart';
+import '../services/minimal_alarm_service.dart';
+import '../services/alarm_service.dart';
+import '../services/emergency_service.dart';
+import '../safety_engine/tap_pattern.dart';
+import 'protection_settings_screen.dart';
+import 'guardian_management_screen.dart';
+import 'tap_pattern_screen.dart';
+
+class GirlHomeScreen extends StatefulWidget {
+  static const routeName = '/girl/home';
+
+  const GirlHomeScreen({super.key});
+
+  @override
+  State<GirlHomeScreen> createState() => _GirlHomeScreenState();
+}
+
+class _GirlHomeScreenState extends State<GirlHomeScreen> {
+  bool _protectionActive = false;
+  int _intervalMinutes = 15;
+  Timer? _timer;
+  TapPattern? _pattern;
+  List<TapZone> _tapPattern = [TapZone.head, TapZone.tail]; // Default: head then tail
+
+  @override
+  void initState() {
+    super.initState();
+    _loadUserState();
+    _checkPersistentProtectionStatus();
+  }
+
+  Future<void> _loadUserState() async {
+    final session = Provider.of<SessionProvider>(context, listen: false);
+    final user = await ParseUser.currentUser() as ParseUser?;
+    if (user != null) {
+      await session.refreshFromParse(user);
+      setState(() {
+        _protectionActive =
+            user.get<bool>('protectionModeActive') ?? false;
+        _intervalMinutes = user.get<int>('checkInterval') ?? 15;
+        final tapData = user.get<Map<String, dynamic>>('tapPatternMeta');
+        final hash = user.get<String>('tapPatternHash');
+        if (tapData != null && hash != null) {
+          _pattern = TapPattern(
+            hash: hash,
+            expectedLength: tapData['expectedLength'] as int,
+            avgGapMillis: tapData['avgGapMillis'] as int,
+          );
+        }
+      });
+      if (_protectionActive) {
+        _startTimer();
+      }
+    }
+  }
+
+  Future<void> _checkPersistentProtectionStatus() async {
+    // Check minimal persistent protection status periodically
+    Timer.periodic(const Duration(seconds: 5), (timer) async {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      
+      final isPersistentActive = await MinimalAlarmService.isPersistentProtectionActive();
+      if (isPersistentActive != _protectionActive) {
+        setState(() {
+          _protectionActive = isPersistentActive;
+        });
+      }
+    });
+  }
+
+  void _startTimer() {
+    _timer?.cancel();
+    _timer = Timer.periodic(
+      Duration(minutes: _intervalMinutes),
+      (_) => _showSafetyCheck(),
+    );
+  }
+
+  Future<void> _toggleProtection(bool value) async {
+    if (value) {
+      // When turning ON protection mode, open settings first
+      final result = await Navigator.of(context).push<bool>(
+        MaterialPageRoute(
+          builder: (_) => const ProtectionSettingsScreen(),
+        ),
+      );
+      
+      // Only proceed if user completed settings
+      if (result != true) {
+        return; // User cancelled, don't turn on protection mode
+      }
+    }
+
+    final user = await ParseUser.currentUser() as ParseUser?;
+    if (user == null) return;
+    
+    setState(() {
+      _protectionActive = value;
+    });
+    
+    user.set<bool>('protectionModeActive', value);
+    user.set<int>('checkInterval', _intervalMinutes);
+    await user.save();
+
+    if (value) {
+      // Check if minimal persistent protection is already active
+      final isPersistentActive = await MinimalAlarmService.isPersistentProtectionActive();
+      if (!isPersistentActive) {
+        // Start periodic alarms for app-based protection
+        _startPeriodicAlarms();
+      }
+    } else {
+      // Stop both periodic and minimal persistent protection
+      _stopPeriodicAlarms();
+      await MinimalAlarmService.stopPersistentProtection();
+    }
+
+    final func = ParseCloudFunction('onProtectionModeChanged');
+    await func.execute(parameters: {
+      'active': value,
+    });
+  }
+
+  void _startPeriodicAlarms() {
+    _stopPeriodicAlarms(); // Cancel any existing timer
+    
+    _timer = Timer.periodic(Duration(minutes: _intervalMinutes), (timer) async {
+      if (!mounted) return;
+      
+      // Show full-screen alarm
+      await AlarmService.showFullScreenAlarm(
+        context,
+        onSuccess: () {
+          // User successfully completed tap pattern
+          print('User confirmed safety');
+        },
+        onEmergency: () async {
+          // Emergency - send SMS to guardians
+          final session = Provider.of<SessionProvider>(context, listen: false);
+          if (session.currentUser?.id != null) {
+            List<String> guardianPhones = await EmergencyService.getGuardianPhoneNumbers(session.currentUser!.id);
+            await EmergencyService.sendEmergencySMS(guardianPhones);
+          }
+        },
+        tapPattern: _tapPattern,
+        savedPatternHash: _pattern?.hash ?? '',
+        savedPatternLength: _pattern?.expectedLength ?? 2,
+        savedPatternAvgGap: _pattern?.avgGapMillis ?? 500,
+      );
+    });
+  }
+
+  void _stopPeriodicAlarms() {
+    _timer?.cancel();
+    _timer = null;
+  }
+
+  Future<void> _showSafetyCheck() async {
+    if (!mounted) return;
+    final result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _SafetyCheckDialog(pattern: _pattern),
+    );
+    if (result == true) {
+      final user = await ParseUser.currentUser() as ParseUser?;
+      if (user != null) {
+        user.set<String>('status', 'SAFE');
+        user.set<DateTime>('lastCheckInTime', DateTime.now().toUtc());
+        await user.save();
+        final func = ParseCloudFunction('onSafetyConfirmed');
+        await func.execute();
+      }
+    } else {
+      final func = ParseCloudFunction('onSafetyFailed');
+      await func.execute();
+    }
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final session = Provider.of<SessionProvider>(context);
+
+    return Scaffold(
+      backgroundColor: const Color(0xfffef4ea),
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        title: const Text(
+          'Guardian-Paws',
+          style: TextStyle(
+            color: Color(0xfff39c6b),
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.logout, color: Color(0xfff39c6b)),
+            onPressed: () async {
+              await session.logout();
+              if (mounted) {
+                Navigator.of(context).pushAndRemoveUntil(
+                  MaterialPageRoute(builder: (_) => const LoginScreen()),
+                  (route) => false,
+                );
+              }
+            },
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Card(
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(24),
+                ),
+                color: const Color(0xfffff2e3),
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Hi, ${session.currentUser?.name ?? 'Friend'}',
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            const Text(
+                              'Your playful kitty keeps an eye on your journeys.',
+                              style: TextStyle(color: Colors.grey),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      SizedBox(
+                        height: 140,
+                        width: 100,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(16),
+                          child: Image.asset(
+                            'assets/images/cat_working.png',
+                            fit: BoxFit.cover,
+                            alignment: Alignment.centerRight,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ).animate().fadeIn(duration: const Duration(milliseconds: 600)).slideY(),
+              const SizedBox(height: 24),
+              const Text(
+                'Protection Mode',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Switch.adaptive(
+                    value: _protectionActive,
+                    onChanged: (value) => _toggleProtection(value),
+                    activeColor: const Color(0xfff39c6b),
+                  ),
+                  Text(
+                    _protectionActive ? 'Paws watching' : 'Kitty is napping',
+                  ),
+                ],
+              ),
+              const SizedBox(height: 24),
+              const Text(
+                'Playful settings',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 12),
+              ListTile(
+                leading: const Icon(Icons.people, color: Color(0xfff39c6b)),
+                title: const Text('Guardian Management'),
+                subtitle: const Text('Manage your emergency contacts'),
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const GuardianManagementScreen(),
+                    ),
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SafetyCheckDialog extends StatefulWidget {
+  final TapPattern? pattern;
+
+  const _SafetyCheckDialog({this.pattern});
+
+  @override
+  State<_SafetyCheckDialog> createState() => _SafetyCheckDialogState();
+}
+
+class _SafetyCheckDialogState extends State<_SafetyCheckDialog> {
+  final List<TapEvent> _events = [];
+  late DateTime _start;
+  late Timer _countdown;
+  int _remaining = 30;
+  bool _submitted = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _start = DateTime.now();
+    _countdown = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) return;
+      setState(() {
+        _remaining--;
+      });
+      if (_remaining <= 0) {
+        _submit();
+      }
+    });
+  }
+
+  void _onTap(TapZone zone) {
+    final now = DateTime.now();
+    final millis = now.difference(_start).inMilliseconds;
+    setState(() {
+      _events.add(TapEvent(zone, millis));
+    });
+  }
+
+  void _submit() {
+    if (_submitted) return;
+    _submitted = true;
+    _countdown.cancel();
+    final ok = widget.pattern == null
+        ? _events.isNotEmpty
+        : TapPatternEngine.validate(widget.pattern!, _events);
+    Navigator.of(context).pop<bool>(ok);
+  }
+
+  @override
+  void dispose() {
+    _countdown.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hasPattern = widget.pattern != null;
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      contentPadding: const EdgeInsets.all(8),
+      content: SizedBox(
+        width: 320,
+        height: 420,
+        child: Column(
+          children: [
+            const SizedBox(height: 8),
+            const Text(
+              'Time to greet your kitty',
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                color: Color(0xfff39c6b),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              hasPattern
+                  ? 'Tap your secret spots in ${_remaining}s'
+                  : 'Tap "I\'m safe" in ${_remaining}s',
+              style: const TextStyle(color: Colors.grey),
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: Stack(
+                children: [
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: Image.asset(
+                        'assets/images/guardian_cat.png',
+                        height: 280,
+                        fit: BoxFit.contain,
+                        alignment: Alignment.centerRight,
+                      ),
+                    ),
+                  ),
+                  if (hasPattern) ...[
+                    _buildZoneTap(
+                      rect: const Rect.fromLTWH(180, 60, 120, 100),
+                      zone: TapZone.head,
+                    ),
+                    _buildZoneTap(
+                      rect: const Rect.fromLTWH(250, 40, 70, 70),
+                      zone: TapZone.leftEar,
+                    ),
+                    _buildZoneTap(
+                      rect: const Rect.fromLTWH(220, 130, 60, 60),
+                      zone: TapZone.mouth,
+                    ),
+                    _buildZoneTap(
+                      rect: const Rect.fromLTWH(260, 220, 60, 100),
+                      zone: TapZone.tail,
+                    ),
+                    _buildZoneTap(
+                      rect: const Rect.fromLTWH(200, 170, 100, 120),
+                      zone: TapZone.body,
+                    ),
+                  ] else
+                    Positioned.fill(
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () => _onTap(TapZone.body),
+                        child: Container(color: Colors.transparent),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            ElevatedButton(
+              onPressed: () {
+                if (!hasPattern) _onTap(TapZone.body);
+                _submit();
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xfff39c6b),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(18),
+                ),
+              ),
+              child: Text(hasPattern ? 'Done playing' : "I'm safe"),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildZoneTap({required Rect rect, required TapZone zone}) {
+    return Positioned(
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => _onTap(zone),
+        child: Container(
+          color: Colors.transparent,
+        ),
+      ),
+    );
+  }
+}
+

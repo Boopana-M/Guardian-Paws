@@ -1,0 +1,8 @@
+guardian-paws/
+  mobile_app/        - Flutter app for girl & guardian
+  backend/           - Back4App Cloud Code & jobs
+  guardian_dashboard/ - React + Vite web dashboard
+
+This file documents the high-level structure. Actual folders and code
+are created alongside this file.
+
