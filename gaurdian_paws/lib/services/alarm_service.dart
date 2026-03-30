@@ -75,6 +75,8 @@ class AlarmService {
     _isShowing = false;
   }
 
+  static AudioPlayer? get audioPlayer => _audioPlayer;
+
   static bool get isShowing => _isShowing;
 }
 
@@ -105,6 +107,9 @@ class _AlarmOverlayState extends State<_AlarmOverlay> with TickerProviderStateMi
   List<TapEvent> currentTaps = [];
   DateTime? _start;
   bool showOkButton = false;
+  bool isPatternCorrect = false;
+  String patternStatus = 'Tap the pattern';
+  int _correctTaps = 0;
 
   @override
   void initState() {
@@ -119,11 +124,14 @@ class _AlarmOverlayState extends State<_AlarmOverlay> with TickerProviderStateMi
     setState(() {
       currentTaps.add(TapEvent(zone, millis));
       
-      // Check if pattern matches using the pattern engine
-      if (currentTaps.length >= widget.tapPattern.length) {
-        // Try to validate with recent taps
-        final recentTaps = currentTaps.length > widget.tapPattern.length * 2
-            ? currentTaps.sublist(currentTaps.length - widget.tapPattern.length * 2)
+      // Update pattern status
+      patternStatus = 'Taps: ${currentTaps.length}';
+      
+      // Check if we have enough taps to validate
+      if (currentTaps.length >= widget.savedPatternLength) {
+        // Take the most recent taps for validation
+        final recentTaps = currentTaps.length > widget.savedPatternLength + 2
+            ? currentTaps.sublist(currentTaps.length - widget.savedPatternLength - 2)
             : currentTaps;
         
         // Create a test pattern from recent taps
@@ -134,10 +142,26 @@ class _AlarmOverlayState extends State<_AlarmOverlay> with TickerProviderStateMi
           avgGapMillis: widget.savedPatternAvgGap,
         );
         
-        if (TapPatternEngine.validate(savedPattern, recentTaps)) {
+        // Validate the pattern
+        isPatternCorrect = TapPatternEngine.validate(savedPattern, recentTaps);
+        
+        if (isPatternCorrect) {
+          patternStatus = '✅ Pattern matched!';
           showOkButton = true;
+        } else {
+          patternStatus = 'Keep tapping...';
         }
       }
+    });
+  }
+
+  void _resetPattern() {
+    setState(() {
+      currentTaps.clear();
+      _start = DateTime.now();
+      showOkButton = false;
+      isPatternCorrect = false;
+      patternStatus = 'Tap the pattern';
     });
   }
 
@@ -226,17 +250,28 @@ class _AlarmOverlayState extends State<_AlarmOverlay> with TickerProviderStateMi
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Taps: ${currentTaps.length}',
-                    style: const TextStyle(
-                      color: Colors.white70,
-                      fontSize: 12,
+                    patternStatus,
+                    style: TextStyle(
+                      color: isPatternCorrect ? Colors.green : Colors.white70,
+                      fontSize: 14,
+                      fontWeight: isPatternCorrect ? FontWeight.bold : FontWeight.normal,
                     ),
+                    textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 16),
                   
                   // Buttons
                   Row(
                     children: [
+                      // Reset button
+                      IconButton(
+                        onPressed: _resetPattern,
+                        icon: const Icon(Icons.refresh, color: Colors.white70),
+                        tooltip: 'Reset Pattern',
+                      ),
+                      const SizedBox(width: 8),
+                      
+                      // Emergency button
                       Expanded(
                         child: OutlinedButton(
                           onPressed: () {
@@ -244,24 +279,30 @@ class _AlarmOverlayState extends State<_AlarmOverlay> with TickerProviderStateMi
                             widget.onDismiss();
                           },
                           style: OutlinedButton.styleFrom(
-                            foregroundColor: Colors.white,
-                            side: const BorderSide(color: Colors.white),
+                            foregroundColor: Colors.red,
+                            side: const BorderSide(color: Colors.red),
                           ),
-                          child: const Text('Emergency'),
+                          child: const Text('🚨 Emergency'),
                         ),
                       ),
                       const SizedBox(width: 12),
+                      
+                      // Success button
                       Expanded(
                         child: ElevatedButton(
                           onPressed: showOkButton ? () {
+                            // Play success sound
+                            AlarmService.audioPlayer?.stop();
                             widget.onSuccess();
                             widget.onDismiss();
                           } : null,
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.white,
-                            foregroundColor: Colors.black,
+                            backgroundColor: showOkButton ? Colors.green : Colors.grey,
+                            foregroundColor: Colors.white,
                           ),
-                          child: const Text('I\'m Safe'),
+                          child: Text(
+                            showOkButton ? '✅ I\'m Safe' : 'Keep tapping...',
+                          ),
                         ),
                       ),
                     ],

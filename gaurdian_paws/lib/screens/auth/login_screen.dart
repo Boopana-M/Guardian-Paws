@@ -3,7 +3,7 @@ import 'package:parse_server_sdk_flutter/parse_server_sdk_flutter.dart';
 import 'package:provider/provider.dart';
 
 import '../../providers/session_provider.dart';
-import '../girl/girl_home_screen.dart';
+import '../girl/simple_girl_home_screen.dart';
 import '../guardian/guardian_home_screen.dart';
 import 'register_screen.dart';
 
@@ -37,7 +37,11 @@ class _LoginScreenState extends State<LoginScreen> {
       final session = Provider.of<SessionProvider>(context, listen: false);
       await session.setUser(user);
       if (session.isGirl) {
-        Navigator.of(context).pushReplacementNamed(SimpleGirlHomeScreen.routeName);
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => const SimpleGirlHomeScreen(),
+          ),
+        );
       } else {
         Navigator.of(context)
             .pushReplacementNamed(GuardianHomeScreen.routeName);

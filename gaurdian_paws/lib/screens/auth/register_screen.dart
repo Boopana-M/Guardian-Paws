@@ -4,7 +4,7 @@ import 'package:parse_server_sdk_flutter/parse_server_sdk_flutter.dart';
 import 'package:provider/provider.dart';
 
 import '../../providers/session_provider.dart';
-import '../girl/girl_home_screen.dart';
+import '../girl/simple_girl_home_screen.dart';
 import '../guardian/guardian_home_screen.dart';
 
 class RegisterScreen extends StatefulWidget {
@@ -84,7 +84,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
       await linkFunc.execute();
 
       if (_isGirl) {
-        Navigator.of(context).pushReplacementNamed(SimpleGirlHomeScreen.routeName);
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => const SimpleGirlHomeScreen(),
+          ),
+        );
       } else {
         Navigator.of(context)
             .pushReplacementNamed(GuardianHomeScreen.routeName);

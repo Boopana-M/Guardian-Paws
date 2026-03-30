@@ -220,7 +220,7 @@ class _ProtectionSettingsScreenState extends State<ProtectionSettingsScreen> {
 
                     const SizedBox(height: 16),
 
-                    // Test Alarm
+                            // Test Alarm
                     Card(
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(16),
@@ -250,41 +250,106 @@ class _ProtectionSettingsScreenState extends State<ProtectionSettingsScreen> {
                               style: TextStyle(color: Colors.grey),
                             ),
                             const SizedBox(height: 12),
-                            SizedBox(
-                              width: double.infinity,
-                              child: OutlinedButton.icon(
-                                onPressed: () async {
-                                  await AlarmService.showFullScreenAlarm(
-                                    context,
-                                    onSuccess: () {
+                            
+                            // Quick test options
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: OutlinedButton.icon(
+                                    onPressed: _pattern != null ? () async {
                                       ScaffoldMessenger.of(context).showSnackBar(
                                         const SnackBar(
-                                          content: Text('Test completed successfully!'),
-                                          backgroundColor: Colors.green,
+                                          content: Text('Alarm will trigger in 5 seconds...'),
+                                          backgroundColor: Colors.blue,
+                                          duration: Duration(seconds: 2),
                                         ),
                                       );
-                                    },
-                                    onEmergency: () async {
-                                      final session = Provider.of<SessionProvider>(context, listen: false);
-                                      if (session.currentUser?.id != null) {
-                                        List<String> guardianPhones = await EmergencyService.getGuardianPhoneNumbers(session.currentUser!.id);
-                                        await EmergencyService.sendEmergencySMS(guardianPhones);
+                                      
+                                      // Delayed alarm trigger
+                                      await Future.delayed(const Duration(seconds: 5));
+                                      
+                                      if (mounted) {
+                                        await AlarmService.showFullScreenAlarm(
+                                          context,
+                                          onSuccess: () {
+                                            ScaffoldMessenger.of(context).showSnackBar(
+                                              const SnackBar(
+                                                content: Text('✅ Test completed successfully!'),
+                                                backgroundColor: Colors.green,
+                                              ),
+                                            );
+                                          },
+                                          onEmergency: () async {
+                                            final session = Provider.of<SessionProvider>(context, listen: false);
+                                            if (session.currentUser?.id != null) {
+                                              List<String> guardianPhones = await EmergencyService.getGuardianPhoneNumbers(session.currentUser!.id);
+                                              await EmergencyService.sendEmergencySMS(guardianPhones);
+                                            }
+                                          },
+                                          tapPattern: _pattern!.toSimplePattern(),
+                                          savedPatternHash: _pattern!.hash,
+                                          savedPatternLength: _pattern!.expectedLength,
+                                          savedPatternAvgGap: _pattern!.avgGapMillis,
+                                        );
                                       }
-                                    },
-                                    tapPattern: _pattern?.toSimplePattern() ?? [TapZone.head, TapZone.tail],
-                                    savedPatternHash: _pattern?.hash ?? '',
-                                    savedPatternLength: _pattern?.expectedLength ?? 2,
-                                    savedPatternAvgGap: _pattern?.avgGapMillis ?? 500,
-                                  );
-                                },
-                                icon: const Icon(Icons.play_arrow),
-                                label: const Text('Test Full-Screen Alarm'),
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: const Color(0xfff39c6b),
-                                  side: const BorderSide(color: Color(0xfff39c6b)),
+                                    } : null,
+                                    icon: const Icon(Icons.timer),
+                                    label: const Text('Test in 5 sec'),
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: const Color(0xfff39c6b),
+                                      side: const BorderSide(color: Color(0xfff39c6b)),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: OutlinedButton.icon(
+                                    onPressed: _pattern != null ? () async {
+                                      await AlarmService.showFullScreenAlarm(
+                                        context,
+                                        onSuccess: () {
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            const SnackBar(
+                                              content: Text('✅ Test completed successfully!'),
+                                              backgroundColor: Colors.green,
+                                            ),
+                                          );
+                                        },
+                                        onEmergency: () async {
+                                          final session = Provider.of<SessionProvider>(context, listen: false);
+                                          if (session.currentUser?.id != null) {
+                                            List<String> guardianPhones = await EmergencyService.getGuardianPhoneNumbers(session.currentUser!.id);
+                                            await EmergencyService.sendEmergencySMS(guardianPhones);
+                                          }
+                                        },
+                                        tapPattern: _pattern!.toSimplePattern(),
+                                        savedPatternHash: _pattern!.hash,
+                                        savedPatternLength: _pattern!.expectedLength,
+                                        savedPatternAvgGap: _pattern!.avgGapMillis,
+                                      );
+                                    } : null,
+                                    icon: const Icon(Icons.play_arrow),
+                                    label: const Text('Test Now'),
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: const Color(0xfff39c6b),
+                                      side: const BorderSide(color: Color(0xfff39c6b)),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            
+                            if (_pattern == null)
+                              const Padding(
+                                padding: EdgeInsets.only(top: 8),
+                                child: Text(
+                                  '⚠️ Please set a tap pattern first',
+                                  style: TextStyle(
+                                    color: Colors.orange,
+                                    fontSize: 12,
+                                  ),
                                 ),
                               ),
-                            ),
                           ],
                         ),
                       ),
@@ -380,7 +445,8 @@ class _ProtectionSettingsScreenState extends State<ProtectionSettingsScreen> {
 // Extension to convert TapPattern to simple pattern list
 extension TapPatternExtension on TapPattern {
   List<TapZone> toSimplePattern() {
-    // For now, return a default pattern - user will set their own
+    // Return the actual pattern zones from the stored hash
+    // For now, we'll use a common pattern - in production, this should be stored separately
     return [TapZone.head, TapZone.tail];
   }
   

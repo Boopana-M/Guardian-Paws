@@ -83,7 +83,7 @@ class _GuardianManagementScreenState
         elevation: 0,
       ),
       backgroundColor: const Color(0xfffef4ea),
-      body: Padding(
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
@@ -140,24 +140,24 @@ class _GuardianManagementScreenState
               ),
             ),
             const SizedBox(height: 16),
-            Expanded(
-              child: ListView.builder(
-                itemCount: _guardians.length,
-                itemBuilder: (context, index) {
-                  final g = _guardians[index];
-                  final accepted = g.get<bool>('acceptedInvite') ?? false;
-                  return Card(
-                    child: ListTile(
-                      leading: const Icon(Icons.shield_moon),
-                      title: Text(g.get<String>('name') ?? 'Guardian'),
-                      subtitle: Text(
-                        '${g.get<String>('phone') ?? ''}\n'
-                        '${accepted ? 'Linked in app' : 'SMS invited'}',
-                      ),
+            ListView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: _guardians.length,
+              itemBuilder: (context, index) {
+                final g = _guardians[index];
+                final accepted = g.get<bool>('acceptedInvite') ?? false;
+                return Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.shield_moon),
+                    title: Text(g.get<String>('name') ?? 'Guardian'),
+                    subtitle: Text(
+                      '${g.get<String>('phone') ?? ''}\n'
+                      '${accepted ? 'Linked in app' : 'SMS invited'}',
                     ),
-                  );
-                },
-              ),
+                  ),
+                );
+              },
             ),
           ],
         ),
